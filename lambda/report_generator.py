@@ -327,8 +327,8 @@ class ReportGenerator:
         """Format mode name as a styled badge."""
         mode_map = {
             "PROVISIONED": '<span class="mode-badge mode-provisioned">Provisioned</span>',
-            "ON_DEMAND": '<span class="mode-badge mode-on-demand">On-Demand Standard</span>',
-            "ON_DEMAND_STANDARD": '<span class="mode-badge mode-on-demand">On-Demand Standard</span>',
+            "ON_DEMAND": '<span class="mode-badge mode-on-demand">On-Demand</span>',
+            "ON_DEMAND_STANDARD": '<span class="mode-badge mode-on-demand">On-Demand</span>',
             "ON_DEMAND_ADVANTAGE": '<span class="mode-badge mode-advantage">On-Demand Advantage</span>',
             "UNABLE_TO_ASSESS": '<span class="mode-badge" style="background:#f0f0f0;color:#666;">Unable to Assess</span>',
         }
