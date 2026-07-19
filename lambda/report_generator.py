@@ -186,7 +186,7 @@ class ReportGenerator:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KDS Mode Optimization Report - {report['region']} - {report['generated_at'][:10]}</title>
+    <title>Kinesis Mode Optimization Report - {report['region']} - {report['generated_at'][:10]}</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #1a1a2e; line-height: 1.6; padding: 2rem; }}
@@ -337,7 +337,7 @@ class ReportGenerator:
     def store_report(self, report: dict) -> dict:
         """Store both JSON and HTML reports in S3. Returns dict with both keys."""
         timestamp = datetime.now(timezone.utc).strftime("%Y/%m/%d/%H%M%S")
-        base_key = f"kds-optimization-reports/{timestamp}-{report['report_id']}"
+        base_key = f"kinesis-optimization-reports/{timestamp}-{report['report_id']}"
 
         # Store JSON
         json_key = f"{base_key}.json"
