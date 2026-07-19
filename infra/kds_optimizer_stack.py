@@ -172,7 +172,7 @@ class KdsOptimizerStack(Stack):
             environment={
                 "REPORT_BUCKET_NAME": report_bucket.bucket_name,
             },
-            description="KDS Mode Optimizer - Bedrock Agent Action Group handler",
+            description="Kinesis Mode Optimizer - Bedrock Agent Action Group handler",
         )
 
         # --- Bedrock Agent IAM Role ---
@@ -312,7 +312,7 @@ When presenting results, highlight high-priority actions first and explain the c
                 "AGENT_ID": agent.attr_agent_id,
                 "AGENT_ALIAS_ID": agent_alias.attr_agent_alias_id,
             },
-            description="Triggers the KDS Optimizer Bedrock Agent on a schedule",
+            description="Triggers the Kinesis Optimizer Bedrock Agent on a schedule",
         )
 
         # EventBridge rule on schedule
@@ -320,7 +320,7 @@ When presenting results, highlight high-priority actions first and explain the c
             self,
             "ScheduleRule",
             schedule=events.Schedule.expression(report_schedule.value_as_string),
-            description="Triggers KDS Optimizer Agent to generate a report",
+            description="Triggers Kinesis Optimizer Agent to generate a report",
         )
         rule.add_target(targets.LambdaFunction(scheduler_lambda))
 
@@ -338,7 +338,7 @@ import os
 import boto3
 
 def handler(event, context):
-    """Invoke the Bedrock Agent to generate a KDS optimization report."""
+    """Invoke the Bedrock Agent to generate a Kinesis optimization report."""
     agent_id = os.environ["AGENT_ID"]
     agent_alias_id = os.environ["AGENT_ALIAS_ID"]
 
