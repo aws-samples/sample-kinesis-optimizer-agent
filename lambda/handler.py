@@ -23,7 +23,7 @@ def lambda_handler(event, context):
     Bedrock Agent action group Lambda handler.
 
     Handles the following API paths:
-    - /analyzeStreams: Analyze all KDS streams and return recommendations
+    - /analyzeStreams: Analyze all kinesis streams and return recommendations
     - /generateReport: Analyze streams and store report in S3
     - /getStreamDetails: Get detailed metrics for a specific stream
     """
