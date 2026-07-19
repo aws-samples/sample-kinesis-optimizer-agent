@@ -59,7 +59,7 @@ Each deployment is independent — its own agent, its own S3 bucket, its own sch
 
 ```bash
 git clone <repo-url>
-cd kds-optimiser-agent
+cd sample-kinesis-optimiser-agent
 ```
 
 ### 2. Install CDK dependencies
@@ -112,7 +112,7 @@ cdk deploy --parameters ReportSchedule="rate(7 days)"
 
 With a specific bucket name:
 ```bash
-cdk deploy --parameters ReportBucketName=my-kds-reports
+cdk deploy --parameters ReportBucketName=my-kinesis-reports
 ```
 
 **To deploy to a different region**, change the environment variable and repeat steps 4-5:
@@ -142,7 +142,7 @@ The deploy outputs will show:
 ### 7. Test the agent
 
 In the **AWS Bedrock Console**:
-1. Go to Agents → `kds-mode-optimizer`
+1. Go to Agents → `kinesis-mode-optimizer`
 2. Open the Test panel (right side)
 3. Select the alias and type: "Analyze all streams and generate a report"
 
@@ -160,13 +160,13 @@ aws bedrock-agent-runtime invoke-agent \
 
 Reports are stored in S3 at:
 ```
-s3://<bucket>/kds-optimization-reports/YYYY/MM/DD/HHMMSS-<report-id>.html
-s3://<bucket>/kds-optimization-reports/YYYY/MM/DD/HHMMSS-<report-id>.json
+s3://<bucket>/kinesis-optimization-reports/YYYY/MM/DD/HHMMSS-<report-id>.html
+s3://<bucket>/kinesis-optimization-reports/YYYY/MM/DD/HHMMSS-<report-id>.json
 ```
 
 Generate a pre-signed URL to view the HTML report in a browser:
 ```bash
-aws s3 presign s3://<bucket>/kds-optimization-reports/2026/01/15/080000-abc123.html --expires-in 3600
+aws s3 presign s3://<bucket>/kinesis-optimization-reports/2026/01/15/080000-abc123.html --expires-in 3600
 ```
 
 ## Configuration
