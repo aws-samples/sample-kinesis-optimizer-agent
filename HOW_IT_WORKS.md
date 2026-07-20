@@ -1,4 +1,4 @@
-# How the KDS Mode Optimizer Agent Works
+# How the Kinesis Mode Optimizer Agent Works
 
 ## The Flow
 
@@ -121,8 +121,8 @@ Takes all the per-stream results and the account-level Advantage assessment and 
 Both files go to S3 under:
 
 ```
-s3://bucket/kds-optimization-reports/YYYY/MM/DD/HHMMSS-{report-id}.json
-s3://bucket/kds-optimization-reports/YYYY/MM/DD/HHMMSS-{report-id}.html
+s3://bucket/kinesis-optimization-reports/YYYY/MM/DD/HHMMSS-{report-id}.json
+s3://bucket/kinesis-optimization-reports/YYYY/MM/DD/HHMMSS-{report-id}.html
 ```
 
 ## What makes it an "agent" vs just a Lambda?
