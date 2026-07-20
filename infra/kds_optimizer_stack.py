@@ -1,18 +1,14 @@
 """
-CDK Stack for the Kinesis Data Streams Mode Optimizer Bedrock Agent.
+CDK Stack for the Kinesis Data Streams Mode Optimizer using AgentCore.
 
 Deploys:
 - S3 bucket for reports
-- Lambda function (action group handler)
-- IAM roles for Bedrock Agent and Lambda
-- Bedrock Agent with action group
-- EventBridge Scheduler to invoke the agent on a schedule
-
-The stack dynamically selects the appropriate foundation model / inference profile
-based on the deployment region.
+- Lambda function (Gateway tool target)
+- AgentCore Gateway with Lambda target
+- AgentCore Harness for agent orchestration
+- EventBridge Scheduler to invoke the harness on a schedule
 """
 
-import json
 from pathlib import Path
 
 import aws_cdk as cdk
@@ -21,7 +17,7 @@ from aws_cdk import (
     Duration,
     RemovalPolicy,
     Stack,
-    aws_bedrock as bedrock,
+    aws_bedrockagentcore as agentcore,
     aws_events as events,
     aws_events_targets as targets,
     aws_iam as iam,
@@ -30,43 +26,27 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-# Map of regions to the best available Claude model/inference profile.
-# Inference profiles are used where direct on-demand invocation isn't supported.
-# Update this map if new models or profiles become available.
-REGION_MODEL_MAP = {
-    # US regions — Claude Sonnet 4.5 via US inference profile
-    "us-east-1": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "us-east-2": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "us-west-2": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    # EU regions — Claude Sonnet 4.5 via EU inference profile
-    "eu-west-1": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "eu-west-2": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "eu-west-3": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "eu-central-1": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    # APAC regions
-    "ap-southeast-2": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "ap-northeast-1": "jp.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "ap-northeast-2": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "ap-southeast-1": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "ap-south-1": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-}
 
-# Fallback model if region not in map — global inference profile
-DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+AGENT_INSTRUCTION = """You are a Kinesis Data Streams capacity mode optimization agent. Your job is to analyze
+Kinesis Data Streams usage in this AWS account and region, and recommend the best capacity mode for each stream.
 
+When asked to generate a report or analyze streams, you should:
+1. Call the analyzeStreams tool to get current usage metrics and recommendations for all streams.
+2. Call the generateReport tool to store the analysis as a report in S3.
+3. Summarize findings including which streams need mode changes, the reasoning, and priorities.
 
-def get_model_for_region(region: str) -> str:
-    """Return the best model/inference profile ID for the given region."""
-    return REGION_MODEL_MAP.get(region, DEFAULT_MODEL)
+Mode selection principles:
+- STRONGLY PREFER On-demand modes over Provisioned because of automatic scaling, zero capacity planning, and no throttling risk.
+- On-demand Advantage is an account-level setting — recommend it separately when the account qualifies (aggregate throughput >= 10 MiB/s, >2 EFO consumers, or >50 streams).
+- Recommend switching individual streams from Provisioned to On-demand when throttling is detected or traffic is variable.
+- Only recommend staying on Provisioned when it is more than 15% cheaper than on-demand AND traffic is stable.
+
+When presenting results, highlight high-priority per-stream actions first, then the account-level Advantage recommendation."""
 
 
 class KdsOptimizerStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
-
-        # Resolve the deploy region at synth time
-        deploy_region = self.region if self.region else "us-east-1"
-        foundation_model = get_model_for_region(deploy_region)
 
         # --- Parameters ---
         report_schedule = CfnParameter(
@@ -74,7 +54,7 @@ class KdsOptimizerStack(Stack):
             "ReportSchedule",
             type="String",
             default="rate(1 day)",
-            description="EventBridge schedule expression for report generation (e.g., rate(1 day), rate(7 days), cron(0 8 ? * MON *)).",
+            description="EventBridge schedule expression for report generation.",
         )
 
         report_bucket_name = CfnParameter(
@@ -172,24 +152,36 @@ class KdsOptimizerStack(Stack):
             environment={
                 "REPORT_BUCKET_NAME": report_bucket.bucket_name,
             },
-            description="Kinesis Mode Optimizer - Bedrock Agent Action Group handler",
+            description="KDS Mode Optimizer - AgentCore Gateway tool target",
         )
 
-        # --- Bedrock Agent IAM Role ---
-        agent_role = iam.Role(
+        # --- AgentCore Gateway (IAM auth for harness access) ---
+        gateway = agentcore.Gateway(
             self,
-            "BedrockAgentRole",
-            assumed_by=iam.ServicePrincipal(
-                "bedrock.amazonaws.com",
-                conditions={
-                    "StringEquals": {"aws:SourceAccount": cdk.Aws.ACCOUNT_ID},
-                    "ArnLike": {
-                        "aws:SourceArn": f"arn:aws:bedrock:{cdk.Aws.REGION}:{cdk.Aws.ACCOUNT_ID}:agent/*"
-                    },
-                },
+            "KdsOptimizerGateway",
+            gateway_name="kds-optimizer",
+            description="Gateway for KDS Mode Optimizer tools",
+            authorizer_configuration=agentcore.IamAuthorizer(),
+        )
+
+        # Add Lambda as a tool target
+        gateway.add_lambda_target(
+            "KdsOptimizerTools",
+            lambda_function=lambda_fn,
+            tool_schema=agentcore.ToolSchema.from_local_asset(
+                str(Path(__file__).parent.parent / "lambda" / "tool_schema.json")
             ),
+            description="Kinesis Data Streams analysis and reporting tools",
+            gateway_target_name="kds-tools",
+        )
+
+        # --- AgentCore Harness ---
+        harness_role = iam.Role(
+            self,
+            "HarnessExecutionRole",
+            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
             inline_policies={
-                "BedrockAgentPolicy": iam.PolicyDocument(
+                "HarnessPolicy": iam.PolicyDocument(
                     statements=[
                         iam.PolicyStatement(
                             actions=[
@@ -202,83 +194,57 @@ class KdsOptimizerStack(Stack):
                             ],
                         ),
                         iam.PolicyStatement(
+                            actions=["bedrock-agentcore:InvokeGateway"],
+                            resources=[gateway.gateway_arn],
+                        ),
+                        iam.PolicyStatement(
                             actions=[
-                                "bedrock:GetInferenceProfile",
-                                "bedrock:ListInferenceProfiles",
-                                "bedrock:GetFoundationModel",
+                                "bedrock-agentcore:*",
                             ],
                             resources=["*"],
+                            conditions={
+                                "StringEquals": {
+                                    "aws:RequestedRegion": cdk.Aws.REGION,
+                                }
+                            },
                         ),
                     ]
                 )
             },
         )
 
-        # --- Bedrock Agent ---
-        agent_instruction = """You are a Kinesis Data Streams capacity mode optimization agent. Your job is to analyze 
-Kinesis Data Streams usage in this AWS account and region, and recommend the best capacity mode for each stream.
-
-When asked to generate a report or analyze streams, you should:
-1. Call the analyzeStreams API to get current usage metrics and recommendations for all streams.
-2. Call the generateReport API to store the analysis as a report in S3.
-3. Summarize findings including which streams need mode changes, the reasoning, and priorities.
-
-Mode selection principles:
-- STRONGLY PREFER On-demand modes over Provisioned because of automatic scaling, zero capacity planning, and no throttling risk.
-- Recommend On-demand Advantage when the account aggregate throughput (ingest + retrieval) across on-demand streams is >= 10 MiB/s, as it offers 60%+ lower pricing.
-- Recommend On-demand Standard for variable/unpredictable traffic patterns.
-- Only recommend Provisioned mode when it is more than 15% cheaper than on-demand AND traffic is stable. Even then, note that on-demand is operationally simpler.
-- Always recommend switching away from Provisioned if throttling is detected.
-
-When presenting results, highlight high-priority actions first and explain the cost and operational implications of each recommendation."""
-
-        agent = bedrock.CfnAgent(
+        harness = agentcore.CfnHarness(
             self,
-            "KdsOptimizerAgent",
-            agent_name="kds-mode-optimizer",
-            agent_resource_role_arn=agent_role.role_arn,
-            foundation_model=foundation_model,
-            instruction=agent_instruction,
-            description="Analyzes Kinesis Data Streams usage and recommends optimal capacity modes (On-demand Standard, On-demand Advantage, or Provisioned).",
-            idle_session_ttl_in_seconds=600,
-            auto_prepare=True,
-            action_groups=[
-                bedrock.CfnAgent.AgentActionGroupProperty(
-                    action_group_name="KdsOptimizerActions",
-                    description="Actions to analyze Kinesis Data Streams and generate optimization reports",
-                    action_group_executor=bedrock.CfnAgent.ActionGroupExecutorProperty(
-                        lambda_=lambda_fn.function_arn,
-                    ),
-                    api_schema=bedrock.CfnAgent.APISchemaProperty(
-                        payload=json.dumps(
-                            json.loads(
-                                (Path(__file__).parent.parent / "lambda" / "openapi_schema.json").read_text()
-                            )
+            "KdsOptimizerHarness",
+            harness_name="kds_mode_optimizer",
+            execution_role_arn=harness_role.role_arn,
+            model=agentcore.CfnHarness.HarnessModelConfigurationProperty(
+                bedrock_model_config=agentcore.CfnHarness.HarnessBedrockModelConfigProperty(
+                    model_id="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                )
+            ),
+            system_prompt=[
+                agentcore.CfnHarness.HarnessSystemContentBlockProperty(
+                    text=AGENT_INSTRUCTION
+                )
+            ],
+            tools=[
+                agentcore.CfnHarness.HarnessToolProperty(
+                    type="agentcore_gateway",
+                    name="kds_optimizer",
+                    config=agentcore.CfnHarness.HarnessToolConfigurationProperty(
+                        agent_core_gateway=agentcore.CfnHarness.HarnessAgentCoreGatewayConfigProperty(
+                            gateway_arn=gateway.gateway_arn,
+                            outbound_auth=agentcore.CfnHarness.HarnessGatewayOutboundAuthProperty(
+                                aws_iam={},
+                            ),
                         )
                     ),
                 )
             ],
         )
 
-        # Grant Bedrock permission to invoke the Lambda
-        lambda_fn.add_permission(
-            "BedrockInvokePermission",
-            principal=iam.ServicePrincipal("bedrock.amazonaws.com"),
-            action="lambda:InvokeFunction",
-            source_arn=f"arn:aws:bedrock:{cdk.Aws.REGION}:{cdk.Aws.ACCOUNT_ID}:agent/*",
-        )
-
-        # --- Bedrock Agent Alias ---
-        agent_alias = bedrock.CfnAgentAlias(
-            self,
-            "KdsOptimizerAgentAlias",
-            agent_id=agent.attr_agent_id,
-            agent_alias_name="live",
-            description=f"Live alias - model: {foundation_model}",
-        )
-        agent_alias.add_dependency(agent)
-
-        # --- EventBridge Rule to trigger the agent on schedule ---
+        # --- Scheduler Lambda to invoke the harness on schedule ---
         scheduler_role = iam.Role(
             self,
             "SchedulerInvokeRole",
@@ -292,10 +258,11 @@ When presenting results, highlight high-priority actions first and explain the c
 
         scheduler_role.add_to_policy(
             iam.PolicyStatement(
-                actions=["bedrock:InvokeAgent"],
-                resources=[
-                    f"arn:aws:bedrock:{cdk.Aws.REGION}:{cdk.Aws.ACCOUNT_ID}:agent-alias/*",
+                actions=[
+                    "bedrock-agentcore:InvokeHarness",
+                    "bedrock-agentcore:InvokeAgentRuntime",
                 ],
+                resources=[harness.attr_arn],
             )
         )
 
@@ -309,10 +276,9 @@ When presenting results, highlight high-priority actions first and explain the c
             timeout=Duration.minutes(10),
             memory_size=256,
             environment={
-                "AGENT_ID": agent.attr_agent_id,
-                "AGENT_ALIAS_ID": agent_alias.attr_agent_alias_id,
+                "HARNESS_ARN": harness.attr_arn,
             },
-            description="Triggers the Kinesis Optimizer Bedrock Agent on a schedule",
+            description="Triggers the KDS Optimizer Harness on a schedule",
         )
 
         # EventBridge rule on schedule
@@ -320,45 +286,47 @@ When presenting results, highlight high-priority actions first and explain the c
             self,
             "ScheduleRule",
             schedule=events.Schedule.expression(report_schedule.value_as_string),
-            description="Triggers Kinesis Optimizer Agent to generate a report",
+            description="Triggers KDS Optimizer Harness to generate a report",
         )
         rule.add_target(targets.LambdaFunction(scheduler_lambda))
 
         # --- Outputs ---
         cdk.CfnOutput(self, "ReportBucketOutput", value=report_bucket.bucket_name)
-        cdk.CfnOutput(self, "AgentId", value=agent.attr_agent_id)
-        cdk.CfnOutput(self, "AgentAliasId", value=agent_alias.attr_agent_alias_id)
+        cdk.CfnOutput(self, "GatewayId", value=gateway.gateway_id)
+        cdk.CfnOutput(self, "GatewayUrl", value=gateway.gateway_url)
+        cdk.CfnOutput(self, "HarnessArn", value=harness.attr_arn)
         cdk.CfnOutput(self, "LambdaFunctionArn", value=lambda_fn.function_arn)
-        cdk.CfnOutput(self, "FoundationModel", value=foundation_model)
 
     def _scheduler_lambda_code(self) -> str:
         return '''
 import json
 import os
+import uuid
 import boto3
 
 def handler(event, context):
-    """Invoke the Bedrock Agent to generate a Kinesis optimization report."""
-    agent_id = os.environ["AGENT_ID"]
-    agent_alias_id = os.environ["AGENT_ALIAS_ID"]
+    """Invoke the AgentCore Harness to generate a KDS optimization report."""
+    harness_arn = os.environ["HARNESS_ARN"]
 
-    client = boto3.client("bedrock-agent-runtime")
+    client = boto3.client("bedrock-agentcore")
 
-    response = client.invoke_agent(
-        agentId=agent_id,
-        agentAliasId=agent_alias_id,
-        sessionId=f"scheduled-{context.aws_request_id}",
-        inputText="Analyze all Kinesis Data Streams in this account and region. Generate a full optimization report and store it in S3. Summarize any high-priority recommendations.",
+    response = client.invoke_harness(
+        harnessArn=harness_arn,
+        runtimeSessionId=str(uuid.uuid4()),
+        messages=[{
+            "role": "user",
+            "content": [{"text": "Analyze all Kinesis Data Streams in this account and region. Generate a full optimization report and store it in S3. Summarize any high-priority recommendations."}],
+        }],
     )
 
     # Consume the response stream
     completion = ""
-    for event_chunk in response.get("completion", []):
-        if "chunk" in event_chunk:
-            chunk_data = event_chunk["chunk"]
-            if "bytes" in chunk_data:
-                completion += chunk_data["bytes"].decode("utf-8")
+    for event_chunk in response.get("stream", []):
+        if "contentBlockDelta" in event_chunk:
+            delta = event_chunk["contentBlockDelta"].get("delta", {})
+            if "text" in delta:
+                completion += delta["text"]
 
-    print(f"Agent response: {completion[:1000]}")
+    print(f"Harness response: {completion[:1000]}")
     return {"statusCode": 200, "body": completion[:5000]}
 '''

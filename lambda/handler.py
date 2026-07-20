@@ -1,8 +1,9 @@
 """
-AWS Lambda handler for the Bedrock Agent action group.
+AWS Lambda handler for the AgentCore Gateway target.
 
-This Lambda is invoked by the Bedrock Agent to analyze Kinesis Data Streams
-and generate optimization reports.
+This Lambda is invoked by AgentCore Gateway when a tool is called.
+The event contains the tool's input parameters as a flat dict.
+The tool name is available in context.client_context.custom.
 """
 
 import json
@@ -17,74 +18,51 @@ logger.setLevel(logging.INFO)
 
 REPORT_BUCKET = os.environ.get("REPORT_BUCKET_NAME", "")
 
+# Delimiter used by AgentCore Gateway to prefix tool names with target name
+TOOL_NAME_DELIMITER = "___"
+
 
 def lambda_handler(event, context):
     """
-    Bedrock Agent action group Lambda handler.
+    AgentCore Gateway Lambda handler.
 
-    Handles the following API paths:
-    - /analyzeStreams: Analyze all kinesis streams and return recommendations
-    - /generateReport: Analyze streams and store report in S3
-    - /getStreamDetails: Get detailed metrics for a specific stream
+    The Gateway passes tool input as the event (flat dict of properties).
+    The tool name is in context.client_context.custom['bedrockAgentCoreToolName'].
     """
     logger.info(f"Received event: {json.dumps(event)}")
 
-    # Parse Bedrock Agent event
-    api_path = event.get("apiPath", "")
-    http_method = event.get("httpMethod", "GET")
-    parameters = event.get("parameters", [])
-    request_body = event.get("requestBody", {})
-
-    # Convert parameters list to dict
-    params = {}
-    if parameters:
-        for param in parameters:
-            params[param["name"]] = param["value"]
-
-    # Also extract from request body if present
-    if request_body:
-        content = request_body.get("content", {})
-        app_json = content.get("application/json", {})
-        if "properties" in app_json:
-            for prop in app_json["properties"]:
-                params[prop["name"]] = prop["value"]
+    # Extract tool name from context
+    tool_name = _get_tool_name(context)
+    logger.info(f"Tool name: {tool_name}")
 
     try:
-        if api_path == "/analyzeStreams":
-            result = handle_analyze_streams(params)
-        elif api_path == "/generateReport":
-            result = handle_generate_report(params)
-        elif api_path == "/getStreamDetails":
-            result = handle_get_stream_details(params)
+        if tool_name == "analyzeStreams":
+            result = handle_analyze_streams(event)
+        elif tool_name == "generateReport":
+            result = handle_generate_report(event)
+        elif tool_name == "getStreamDetails":
+            result = handle_get_stream_details(event)
         else:
-            result = {"error": f"Unknown API path: {api_path}"}
+            result = {"error": f"Unknown tool: {tool_name}"}
 
-        response_body = {"application/json": {"body": json.dumps(result, default=str)}}
-
-        action_response = {
-            "actionGroup": event.get("actionGroup", ""),
-            "apiPath": api_path,
-            "httpMethod": http_method,
-            "httpStatusCode": 200,
-            "responseBody": response_body,
-        }
-
-        api_response = {"messageVersion": "1.0", "response": action_response}
-        return api_response
+        return json.loads(json.dumps(result, default=str))
 
     except Exception as e:
         logger.error(f"Error handling request: {e}", exc_info=True)
-        error_body = {"application/json": {"body": json.dumps({"error": str(e)})}}
-        return {
-            "messageVersion": "1.0",
-            "response": {
-                "actionGroup": event.get("actionGroup", ""),
-                "apiPath": api_path,
-                "httpMethod": http_method,
-                "httpStatusCode": 500,
-                "responseBody": error_body,
-            },
-        }
+        return {"error": str(e)}
+
+
+def _get_tool_name(context) -> str:
+    """Extract the tool name from the AgentCore Gateway context."""
+    try:
+        original_name = context.client_context.custom.get("bedrockAgentCoreToolName", "")
+        # Strip the target name prefix (format: targetName___toolName)
+        if TOOL_NAME_DELIMITER in original_name:
+            return original_name[original_name.index(TOOL_NAME_DELIMITER) + len(TOOL_NAME_DELIMITER):]
+        return original_name
+    except (AttributeError, TypeError):
+        # Fallback: check if tool_name is passed directly in event (for local testing)
+        return ""
 
 
 def handle_analyze_streams(params: dict) -> dict:
@@ -133,7 +111,6 @@ def handle_get_stream_details(params: dict) -> dict:
             "StreamMode", "PROVISIONED"
         )
 
-        # For single-stream analysis, use its own throughput as aggregate estimate
         rec = analyzer.recommend_mode(usage_summary, current_mode)
 
         return {

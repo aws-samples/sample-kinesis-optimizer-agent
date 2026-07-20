@@ -1,6 +1,6 @@
 # Kinesis Data Streams Mode Optimizer Agent
 
-An AI-powered agent running on Amazon Bedrock that analyzes your Kinesis Data Streams usage and recommends the optimal capacity mode: **On-demand Standard**, **On-demand Advantage**, or **Provisioned**.
+An AI-powered agent running on Amazon Bedrock AgentCore that analyzes your Kinesis Data Streams usage and recommends the optimal capacity mode: **On-demand Standard**, **On-demand Advantage**, or **Provisioned**.
 
 The agent strongly prefers on-demand modes for their operational simplicity (automatic scaling, no capacity planning, no throttling risk) and only recommends provisioned when it's demonstrably cheaper (>15%).
 
@@ -16,16 +16,24 @@ See [HOW_IT_WORKS.md](HOW_IT_WORKS.md) for a detailed step-by-step explanation o
 EventBridge Schedule (daily/weekly/custom)
     │
     ▼
-Scheduler Lambda ──► Bedrock Agent 
+Scheduler Lambda ──► AgentCore Harness (orchestration loop)
                           │
                           ▼
-                     Action Group Lambda
+                     AgentCore Gateway (MCP tools)
+                          │
+                          ▼
+                     Tool Lambda
                           │
                 ┌─────────┼─────────┐
                 ▼         ▼         ▼
            Kinesis    CloudWatch    S3
            (list)     (metrics)   (report)
 ```
+
+**Key components:**
+- **AgentCore Harness** — Managed orchestration loop that handles model inference, tool routing, and multi-turn conversations
+- **AgentCore Gateway** — Exposes the Lambda as MCP-compatible tools with IAM auth
+- **Tool Lambda** — Business logic for stream analysis, metrics collection, and report generation
 
 ## Region Behavior
 
@@ -44,14 +52,15 @@ cdk bootstrap aws://<ACCOUNT_ID>/eu-west-1
 cdk deploy
 ```
 
-Each deployment is independent — its own agent, its own S3 bucket, its own schedule.
+Each deployment is independent — its own harness, its own S3 bucket, its own schedule.
 
 ## Prerequisites
 
-- **AWS CDK v2** — `npm install -g aws-cdk`
+- **AWS CDK v2 (2.1132+)** — `npm install -g aws-cdk`
 - **Python 3.12+**
+- **aws-cdk-lib >= 2.251.0** — for AgentCore L2 constructs
 - **AWS CLI** configured with credentials that have admin access
-- **Bedrock model access** — ensure you have access to Claude Sonnet 4.5 (or your chosen model) in the target region. Check in the Bedrock console under "Model access".
+- **Bedrock model access** — ensure you have access to Claude Sonnet 4.5 in the target region
 
 ## Step-by-Step Deployment
 
@@ -59,7 +68,7 @@ Each deployment is independent — its own agent, its own S3 bucket, its own sch
 
 ```bash
 git clone <repo-url>
-cd sample-kinesis-optimiser-agent
+cd sample-kds-optimizer-agent
 ```
 
 ### 2. Install CDK dependencies
@@ -71,16 +80,9 @@ pip install -r requirements.txt
 
 ### 3. Set your target region
 
-The stack deploys to whatever region is set in the `AWS_DEFAULT_REGION` environment variable. Set it before running any CDK commands:
-
 **PowerShell:**
 ```powershell
 $env:AWS_DEFAULT_REGION="us-east-1"
-```
-
-**cmd:**
-```cmd
-set AWS_DEFAULT_REGION=us-east-1
 ```
 
 **Linux/macOS:**
@@ -92,11 +94,6 @@ export AWS_DEFAULT_REGION=us-east-1
 
 ```bash
 cdk bootstrap aws://<ACCOUNT_ID>/<REGION>
-```
-
-Example:
-```bash
-cdk bootstrap aws://123456789012/us-east-1
 ```
 
 ### 5. Deploy
@@ -115,45 +112,46 @@ With a specific bucket name:
 cdk deploy --parameters ReportBucketName=my-kinesis-reports
 ```
 
-**To deploy to a different region**, change the environment variable and repeat steps 4-5:
-```powershell
-$env:AWS_DEFAULT_REGION="eu-west-1"
-cdk bootstrap aws://123456789012/eu-west-1
-cdk deploy
-```
-
-### 6. Check Bedrock model availability (if deploy fails)
-
-The stack automatically selects the right Claude model/inference profile for your region. If you hit model access errors, confirm you have Bedrock model access enabled in the target region:
-
-```bash
-aws bedrock list-inference-profiles --region us-east-1 --query "InferenceProfileSummaries[?contains(InferenceProfileId,'claude')].{Id:InferenceProfileId,Name:InferenceProfileName}" --output table
-```
-
-### 7. Verify deployment
+### 6. Verify deployment
 
 The deploy outputs will show:
-- **AgentId** — Bedrock Agent identifier
-- **AgentAliasId** — Alias for invocation
+- **GatewayId** — AgentCore Gateway identifier
+- **GatewayUrl** — MCP endpoint URL for the gateway
+- **HarnessArn** — AgentCore Harness ARN for invocation
 - **ReportBucketOutput** — S3 bucket where reports land
-- **LambdaFunctionArn** — The action group Lambda
-- **FoundationModel** — Which model was selected for this region
+- **LambdaFunctionArn** — The tool Lambda
 
 ### 7. Test the agent
 
-In the **AWS Bedrock Console**:
-1. Go to Agents → `kinesis-mode-optimizer`
-2. Open the Test panel (right side)
-3. Select the alias and type: "Analyze all streams and generate a report"
+Via Python SDK:
+```python
+import boto3, uuid
 
-Or via CLI:
+client = boto3.client("bedrock-agentcore", region_name="us-east-1")
+
+response = client.invoke_harness(
+    harnessArn="<HARNESS_ARN>",
+    runtimeSessionId=str(uuid.uuid4()),
+    messages=[{
+        "role": "user",
+        "content": [{"text": "Analyze all Kinesis streams and generate a report."}],
+    }],
+)
+
+for event in response.get("stream", []):
+    if "contentBlockDelta" in event:
+        delta = event["contentBlockDelta"].get("delta", {})
+        if "text" in delta:
+            print(delta["text"], end="", flush=True)
+```
+
+Or via AWS CLI:
 ```bash
-aws bedrock-agent-runtime invoke-agent \
-  --agent-id <AGENT_ID> \
-  --agent-alias-id <ALIAS_ID> \
-  --session-id "test-001" \
-  --input-text "Generate an optimization report" \
-  --region <REGION>
+aws bedrock-agentcore invoke-harness \
+  --harness-arn <HARNESS_ARN> \
+  --runtime-session-id $(uuidgen) \
+  --messages '[{"role":"user","content":[{"text":"Generate an optimization report"}]}]' \
+  --region us-east-1
 ```
 
 ### 8. View reports
@@ -182,7 +180,7 @@ aws s3 presign s3://<bucket>/kinesis-optimization-reports/2026/01/15/080000-abc1
 
 ### Changing the model
 
-Edit `infra/kds_optimizer_stack.py` and update `foundation_model` to a model available in your target region. Also update the IAM policy resources to match.
+Edit `infra/kds_optimizer_stack.py` and update the `model_id` in the `HarnessBedrockModelConfigProperty` to a model available in your target region.
 
 ## Project Structure
 
@@ -191,18 +189,17 @@ Edit `infra/kds_optimizer_stack.py` and update `foundation_model` to a model ava
 ├── HOW_IT_WORKS.md             # Detailed explanation of the analysis logic
 ├── .gitignore
 ├── lambda/
-│   ├── handler.py              # Bedrock Agent action group Lambda handler
+│   ├── handler.py              # AgentCore Gateway tool Lambda handler
 │   ├── kinesis_analyzer.py     # Core analysis engine (metrics + recommendations)
 │   ├── report_generator.py     # HTML + JSON report generation and S3 storage
-│   ├── openapi_schema.json     # OpenAPI spec defining agent actions
+│   ├── tool_schema.json        # MCP tool definitions for AgentCore Gateway
 │   └── requirements.txt
 ├── infra/
 │   ├── app.py                  # CDK app entry point
 │   ├── cdk.json                # CDK configuration
-│   ├── kds_optimizer_stack.py  # Full infrastructure stack
+│   ├── kds_optimizer_stack.py  # Full infrastructure stack (AgentCore)
 │   └── requirements.txt
 └── tests/
-    ├── __init__.py
     ├── test_kinesis_analyzer.py # Unit tests for recommendation logic
     └── test_scale.py           # Scale test (500 streams)
 ```
@@ -252,7 +249,7 @@ The cost analysis uses full three-way comparison (us-east-1 rates):
 python -m pytest tests/test_kinesis_analyzer.py -v
 
 # Scale test (simulates 500 streams)
-python tests/test_scale.py
+python -m pytest tests/test_scale.py -v
 ```
 
 ## Cleanup
@@ -260,11 +257,10 @@ python tests/test_scale.py
 To remove the stack from a region:
 ```bash
 cd infra
-cdk destroy --region <REGION>
+cdk destroy
 ```
 
 Note: The S3 bucket has `RemovalPolicy.RETAIN` — it won't be deleted with the stack. Delete it manually if needed.
-
 
 ## Security
 

@@ -1,4 +1,4 @@
-# How the Kinesis Mode Optimizer Agent Works
+# How the KDS Mode Optimizer Agent Works
 
 ## The Flow
 
@@ -6,11 +6,14 @@
 You (or EventBridge schedule)
     │
     ▼
-Amazon Bedrock Agent (AI brain)
-    │  "Analyze streams and generate a report"
-    ▼
-Lambda Function (action group)
-    │
+Scheduler Lambda ──► AgentCore Harness (AI orchestration loop)
+                          │  "Analyze streams and generate a report"
+                          ▼
+                     AgentCore Gateway (MCP tool routing)
+                          │
+                          ▼
+                     Tool Lambda
+                          │
     ├──► Step 1: List all streams (Kinesis API)
     ├──► Step 2: Describe each stream (get shard count, mode, retention)
     ├──► Step 3: List EFO consumers per stream
@@ -20,9 +23,9 @@ Lambda Function (action group)
     ├──► Step 7: Account-level On-demand Advantage assessment
     ├──► Step 8: Generate HTML + JSON report
     └──► Step 9: Store in S3
-    │
-    ▼
-Bedrock Agent summarizes the result back to you
+                          │
+                          ▼
+                     Harness summarizes the result back to you
 ```
 
 ## Step by Step
@@ -127,11 +130,14 @@ s3://bucket/kinesis-optimization-reports/YYYY/MM/DD/HHMMSS-{report-id}.html
 
 ## What makes it an "agent" vs just a Lambda?
 
-The **Bedrock Agent** is the AI layer on top. It:
+The **AgentCore Harness** is the AI orchestration layer. It:
 
 - Understands natural language ("analyze my streams")
-- Decides which API to call (analyzeStreams, generateReport, or getStreamDetails)
+- Decides which tools to call (analyzeStreams, generateReport, or getStreamDetails) via the Gateway
 - Interprets the results and writes a human-friendly summary
 - Can answer follow-up questions ("why did you recommend on-demand for stream X?")
+- Manages conversation memory across turns
 
-The Lambda does the heavy lifting (data collection + math). The agent makes it conversational and autonomous.
+The **AgentCore Gateway** exposes the Lambda's tools as MCP-compatible endpoints, handling authentication, routing, and protocol translation.
+
+The Lambda does the heavy lifting (data collection + math). The Harness + Gateway make it conversational and autonomous.

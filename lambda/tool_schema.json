@@ -1,0 +1,39 @@
+[
+  {
+    "name": "analyzeStreams",
+    "description": "Analyze all Kinesis Data Streams in the current region. Collects 7 days of CloudWatch metrics, computes throughput patterns, throttling rates, and cost comparisons across all three pricing modes. Returns per-stream recommendations (provisioned vs on-demand) and an account-level On-demand Advantage assessment.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "generateReport",
+    "description": "Analyze all Kinesis Data Streams and store a full optimization report (HTML + JSON) in S3. Use this for scheduled reporting or when you want a persistent, shareable report.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "bucket_name": {
+          "type": "string",
+          "description": "S3 bucket name to store the report. If not provided, uses the default configured bucket."
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "getStreamDetails",
+    "description": "Get detailed CloudWatch metrics, EFO consumers, usage patterns, and a capacity mode recommendation for a single named Kinesis Data Stream.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "stream_name": {
+          "type": "string",
+          "description": "The name of the Kinesis Data Stream to analyze"
+        }
+      },
+      "required": ["stream_name"]
+    }
+  }
+]
